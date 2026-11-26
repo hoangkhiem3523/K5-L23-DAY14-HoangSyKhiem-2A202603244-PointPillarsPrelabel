@@ -57,3 +57,35 @@ Số đo từ `scripts/pp_prelabel.py --frames d14_2A202603244/frames_B.txt --co
 2. **Lệch hệ nhãn và miền dữ liệu của PointPillars pre-trained trên KITTI:** Model chỉ có 3 lớp (`Car`, `Pedestrian`, `Cyclist`) và không được huấn luyện lớp `Bus`/`Truck`, nên trên dữ liệu VF chắc chắn bỏ sót hoặc gán sai lớp/kích thước cho xe tải và xe buýt; đồng thời khác loại LiDAR/góc lắp cảm biến khiến model vẫn hay lật `yaw` `180°` và nhận nhầm vật thể ven đường thành `Cyclist`.
 3. **Chi phí đánh giá chỉ là hàm công thức, chưa phải thời gian sửa nhãn thực tế:** Trọng số `0.3·xóa + 1.0·thêm + 0.5·sửa` là phép đo ước lượng (không đo thời gian xoay góc nhìn 3D, căn tâm/kích thước từng hộp hay độ khó của xe bị che khuất). Vì vậy mức giảm `34%` trên tập A hay `49,5%` trên tập B phản ánh giảm điểm chi phí theo công thức, **không thể kết luận là tiết kiệm tương ứng số giờ công lao động thật**.
 4. **Dùng một ngưỡng `score_thr` chung cho tất cả các lớp:** Nâng `score_thr` lên `0.5` cắt rất tốt box thừa ở `Car`/`Cyclist` nhưng lại làm sót mạnh `Pedestrian` (`2/16` ở tập B) vì người đi bộ thường có điểm tin cậy thấp hơn ô tô. Nếu mở rộng phạm vi tune sang ngưỡng riêng theo lớp (`thr_car`, `thr_cyc`, `thr_ped`) kết hợp bộ lọc hình học thì sẽ cân bằng tốt hơn giữa xóa và thêm.
+
+---
+
+## Bonus — Hướng 2: Chạy PointPillars bên trong CVAT (Nuclio)
+
+- **Thư mục function:** [`bonus/pp_nuclio/`](../../bonus/pp_nuclio/) (`function.yaml`, `main.py`, `stage_build.py`, `eval_nuclio.py`, `README.md`).
+- **Môi trường triển khai:**
+  - Bật Nuclio (`quay.io/nuclio/dashboard:1.16.3-amd64`, không mở cổng `8070` ra mạng ngoài) kèm CVAT Docker bằng `docker-compose.serverless.yml`.
+  - Trên Windows, binary `nuctl-windows-amd64` gọi `/bin/sh` bị lỗi thiếu shell nên đã chạy `nuctl-1.16.3-linux-amd64` trực tiếp bên trong container `nuclio` để build image `nuclio/processor-pp-2a202603244:latest`.
+  - Trạng thái sau deploy: `pp-2a202603244` (`STATE=ready`, `1/1` replica), hiển thị đầy đủ 5 nhãn cuboid 3D trên `GET /api/lambda/functions` và trang **Models** của CVAT.
+- **Chạy thực tế trên task 3D riêng (`D14-2A202603244-NUCLIO`, 12 frame tập B, không chạm Task A/B chính):**
+  - Gọi API `POST /api/lambda/requests` với `{"function": "pp-2a202603244", "task": 37, "threshold": 0.5, "cleanup": true}` → hoàn thành `100%` trong `41,8s` (`~3,5s/frame`, `exc_info: null`).
+  - Đọc trực tiếp kết quả bằng `GET /api/jobs/35/annotations` (tránh lỗi export shape `cvat#9144`) và so khớp với `d14_2A202603244/pred_B.json` chạy offline ở cùng ngưỡng `score_thr = 0.5`:
+
+| Frame | Box CVAT (Nuclio) | Box offline (`pred_B.json`) | Trùng tâm ≤ 0,5 m | Sai số tâm TB (m) | Ghi chú |
+|---|---:|---:|---:|---:|---|
+| `s01f02` | 19 | 19 | 18 | 0.008 | 1 box lệch quanh biên ngưỡng 0.5 do intensity xấp xỉ |
+| `s01f22` | 8 | 8 | 8 | 0.006 | Khớp đủ 8/8 |
+| `s01f56` | 14 | 14 | 13 | 0.011 | 1 box gần ngưỡng thay đổi do lượng tử hóa PCD `rgb` |
+| `s02f00` | 6 | 7 | 6 | 0.007 | Ít hơn 1 box sát ngưỡng 0.5 |
+| `s02f19` | 17 | 19 | 17 | 0.011 | Ít hơn 2 box sát ngưỡng 0.5 |
+| `s02f41` | 12 | 11 | 10 | 0.010 | Lệch nhỏ do intensity xấp xỉ |
+| `s03f11` | 11 | 11 | 11 | 0.011 | Khớp đủ 11/11 |
+| `s03f40` | 4 | 4 | 4 | 0.003 | Khớp đủ 4/4 |
+| `s03f59` | 10 | 9 | 9 | 0.008 | Thêm 1 box sát ngưỡng 0.5 |
+| `s05f00` | 15 | 15 | 15 | 0.017 | Khớp đủ 15/15 |
+| `s05f16` | 18 | 16 | 16 | 0.011 | Thêm 2 box sát ngưỡng 0.5 |
+| `s05f36` | 14 | 13 | 13 | 0.008 | Thêm 1 box sát ngưỡng 0.5 |
+| **Tổng** | **148** | **146** | **140** | **~0.010** | **140/146 (95,9%) box offline khớp tâm ≤ 0,5 m cùng nhãn** |
+
+- **Nhận xét trung thực về chênh lệch:** Kết quả từ Nuclio không giống hệt 100% offline (`148` vs `146` box, `140` box trùng tâm ≤ `0,5 m` với sai số tâm trung bình chỉ khoảng `1 cm`) vì CVAT gửi file `.pcd` đã nén `intensity` gốc vào kênh `rgb` 8-bit (`40..255`, mất độ phân giải trên `50`), nên bước đảo ngược trong `parse_pcd()` chỉ khôi phục xấp xỉ, làm một số box có confidence sát `0.5` trồi/sụt qua ngưỡng.
+- **Video minh chứng:** [`bonus/pp_nuclio/demo_nuclio_3d.mp4`](../../bonus/pp_nuclio/demo_nuclio_3d.mp4) (quay màn hình trang **Models** hiển thị `PointPillars 2A202603244` → mở Job `#35` Task `#37` xoay đám mây điểm 3D và duyệt qua các frame có cuboid tự sinh trên đám mây điểm LiDAR, không hiển thị mật khẩu).

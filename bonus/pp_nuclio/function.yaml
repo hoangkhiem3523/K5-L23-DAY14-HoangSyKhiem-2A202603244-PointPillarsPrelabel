@@ -1,0 +1,42 @@
+metadata:
+  name: pp-2a202603244
+  namespace: nuclio
+  annotations:
+    name: PointPillars 2A202603244
+    type: detector
+    framework: pytorch
+    supported_shape_types: cuboid
+    spec: |
+      [
+        {"id": 1, "name": "Car", "type": "cuboid"},
+        {"id": 2, "name": "Truck", "type": "cuboid"},
+        {"id": 3, "name": "Bus", "type": "cuboid"},
+        {"id": 4, "name": "Cyclist", "type": "cuboid"},
+        {"id": 5, "name": "Pedestrian", "type": "cuboid"}
+      ]
+
+spec:
+  description: Pre-trained PointPillars 3D detector (VF LiDAR) for CVAT Day 14 bonus
+  runtime: python:3.10
+  handler: main:handler
+  eventTimeout: 180s
+
+  build:
+    baseImage: python:3.10-slim
+    directives:
+      preCopy:
+        - kind: RUN
+          value: pip install --no-cache-dir numpy torch --extra-index-url https://download.pytorch.org/whl/cpu
+
+  triggers:
+    myHttpTrigger:
+      kind: http
+      numWorkers: 1
+      attributes:
+        maxRequestBodySize: 33554432
+
+  platform:
+    attributes:
+      restartPolicy:
+        name: always
+        maximumRetryCount: 3
